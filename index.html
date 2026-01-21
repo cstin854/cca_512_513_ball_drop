@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; display: flex; justify-content: center; background: #f8f9fa; padding: 20px; }
+        #container { display: flex; gap: 30px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        #controls { width: 220px; }
+        .input-group { margin-bottom: 20px; }
+        label { font-weight: bold; display: block; margin-bottom: 5px; color: #444; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        select { width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
+        button { width: 100%; padding: 12px; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 6px; font-weight: bold; }
+        button:hover { background: #218838; }
+
+        #arena {
+            width: 180px;
+            height: 600px; 
+            background: #fff;
+            border-bottom: 4px solid #333;
+            border-left: 1px solid #ddd;
+            position: relative;
+            background-image: linear-gradient(#eee 1px, transparent 1px);
+            background-size: 100% 75px; 
+        }
+
+        .label { 
+            position: absolute; 
+            left: -45px; 
+            width: 40px; 
+            text-align: right; 
+            font-size: 11px; 
+            color: #999;
+            transform: translateY(50%); 
+        }
+
+        #ball {
+            width: 26px;
+            height: 26px;
+            background: radial-gradient(circle at 30% 30%, #4facfe, #00f2fe);
+            border-radius: 50%;
+            position: absolute;
+            left: 77px;
+            bottom: 0;
+            display: none;
+            z-index: 2;
+        }
+
+        #apex-marker {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            border-top: 2px dashed #4facfe;
+            display: none;
+            z-index: 1;
+        }
+        #apex-marker span {
+            position: absolute;
+            right: 5px;
+            top: -22px;
+            background: #4facfe;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        #log-container { width: 180px; }
+        #height-log { height: 550px; overflow-y: auto; border: 1px solid #eee; padding: 10px; font-size: 14px; border-radius: 4px; background: #fafafa; }
+        .log-entry { margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid #eee; color: #555; }
+        .log-entry.special { color: #007bff; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <div id="controls">
+        <div class="input-group">
+            <label>Drop Height: <span id="heightVal">100</span> cm</label>
+            <input type="range" id="heightSlider" min="0" max="200" value="100">
+        </div>
+        <div class="input-group">
+            <label>Mode:</label>
+            <select id="mode">
+                <option value="single" selected>Single Bounce</option>
+                <option value="continuous">Continue til done</option>
+            </select>
+        </div>
+        <button id="dropBtn">Drop Ball</button>
+    </div>
+
+    <div id="arena">
+        <div class="label" style="bottom: 600px;">200</div>
+        <div class="label" style="bottom: 525px;">175</div>
+        <div class="label" style="bottom: 450px;">150</div>
+        <div class="label" style="bottom: 375px;">125</div>
+        <div class="label" style="bottom: 300px;">100</div>
+        <div class="label" style="bottom: 225px;">75</div>
+        <div class="label" style="bottom: 150px;">50</div>
+        <div class="label" style="bottom: 75px;">25</div>
+        <div class="label" style="bottom: 0px;">0</div>
+        
+        <div id="apex-marker"><span></span></div>
+        <div id="ball"></div>
+    </div>
+
+    <div id="log-container">
+        <label>Bounce History (cm):</label>
+        <div id="height-log"></div>
+    </div>
+</div>
+
+<script>
+    const ball = document.getElementById('ball');
+    const marker = document.getElementById('apex-marker');
+    const heightSlider = document.getElementById('heightSlider');
+    const heightVal = document.getElementById('heightVal');
+    const dropBtn = document.getElementById('dropBtn');
+    const modeSelect = document.getElementById('mode');
+    const heightLog = document.getElementById('height-log');
+
+    let animationId;
+    let globalBounceCount = 0;
+    const PIXELS_PER_CM = 3;
+    const GRAVITY = 0.4; 
+
+    // Reset logic
+    function clearLog() {
+        heightLog.innerHTML = '';
+        globalBounceCount = 0;
+        marker.style.display = 'none';
+    }
+
+    // Slider reset trigger
+    heightSlider.oninput = () => {
+        heightVal.textContent = heightSlider.value;
+        clearLog();
+    };
+
+    function addLogEntry(num, height, isSpecial = false) {
+        const entry = document.createElement('div');
+        entry.className = 'log-entry' + (isSpecial ? ' special' : '');
+        entry.textContent = `Bounce ${num}: ${parseFloat(height).toFixed(1)} cm`;
+        heightLog.appendChild(entry);
+        heightLog.scrollTop = heightLog.scrollHeight;
+    }
+
+    function dropBall() {
+        cancelAnimationFrame(animationId);
+        
+        // Reset only if in continuous mode
+        if (modeSelect.value === 'continuous') {
+            clearLog();
+        }
+        
+        marker.style.display = 'none';
+        
+        let initialHeightCm = parseFloat(heightSlider.value);
+        let currentApexHeightCm = initialHeightCm;
+        let velocity = 0;
+        let positionPx = initialHeightCm * PIXELS_PER_CM;
+        
+        let isMoving = true;
+        let hasHitGround = false;
+
+        // Log Bounce 0 ONLY if starting a fresh sequence
+        if (globalBounceCount === 0) {
+            addLogEntry(0, initialHeightCm, true);
+        }
+
+        ball.style.display = 'block';
+
+        function step() {
+            let vMid = velocity + (GRAVITY / 2);
+            positionPx -= vMid;
+            velocity += GRAVITY;
+
+            if (positionPx <= 0) {
+                positionPx = 0;
+                hasHitGround = true;
+                
+                const reboundFactor = 0.66 + (Math.random() * 0.08);
+                currentApexHeightCm = currentApexHeightCm * reboundFactor;
+                
+                velocity = -Math.sqrt(2 * GRAVITY * (currentApexHeightCm * PIXELS_PER_CM));
+                globalBounceCount++;
+            }
+
+            // APEX DETECTION
+            if (hasHitGround && velocity >= 0) {
+                positionPx = currentApexHeightCm * PIXELS_PER_CM;
+                let displayHeight = currentApexHeightCm.toFixed(1);
+                
+                addLogEntry(globalBounceCount, displayHeight);
+
+                if (modeSelect.value === 'single') {
+                    isMoving = false;
+                    marker.style.display = 'block';
+                    marker.style.bottom = positionPx + 'px'; 
+                    marker.querySelector('span').textContent = displayHeight + ' cm';
+
+                    // Update slider without triggering the 'oninput' clear
+                    const roundedApex = Math.round(currentApexHeightCm);
+                    heightSlider.value = roundedApex;
+                    heightVal.textContent = roundedApex;
+                }
+
+                if (currentApexHeightCm < 1.0) {
+                    isMoving = false;
+                    positionPx = 0;
+                    addLogEntry(globalBounceCount + 1, 0, true);
+                    globalBounceCount++; // Prevent redundant 0.0 logs if dropped again
+                }
+                hasHitGround = false; 
+            }
+
+            ball.style.bottom = positionPx + 'px';
+
+            if (isMoving) {
+                animationId = requestAnimationFrame(step);
+            }
+        }
+
+        animationId = requestAnimationFrame(step);
+    }
+
+    dropBtn.onclick = dropBall;
+</script>
+
+</body>
+</html>
